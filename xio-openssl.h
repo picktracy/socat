@@ -34,7 +34,7 @@ extern const struct optdesc opt_openssl_commonname;
 extern int
    _xioopen_openssl_prepare(struct opt *opts, struct single *xfd,
 			    bool server, bool *opt_ver, const char *opt_cert,
-			    SSL_CTX **ctx);
+			    SSL_CTX **ctx, int *ipproto, int *socktype);
 extern int
    _xioopen_openssl_connect(struct single *xfd,  bool opt_ver,
 			    const char *opt_commonname,

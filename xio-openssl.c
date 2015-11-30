@@ -16,6 +16,7 @@
 #include "xio-listen.h"
 #include "xio-ipapp.h"
 #include "xio-openssl.h"
+#include "xio-udp.h"
 
 /* the openssl library requires a file descriptor for external communications.
    so our best effort is to provide any possible kind of un*x file descriptor 
@@ -85,7 +86,7 @@ const struct addrdesc addr_openssl_listen = {
    3,		/* data flow directions this address supports on API layer:
 		   1..read, 2..write, 3..both */
    xioopen_openssl_listen,	/* a function pointer used to "open" these addresses.*/
-   GROUP_FD|GROUP_SOCKET|GROUP_SOCK_IP4|GROUP_SOCK_IP6|GROUP_IP_TCP|GROUP_LISTEN|GROUP_CHILD|GROUP_RANGE|GROUP_OPENSSL|GROUP_RETRY,	/* bitwise OR of address groups this address belongs to.
+   GROUP_FD|GROUP_SOCKET|GROUP_SOCK_IP|GROUP_IP_TCP|GROUP_IP_UDP|GROUP_LISTEN|GROUP_CHILD|GROUP_RANGE|GROUP_OPENSSL|GROUP_RETRY,	/* bitwise OR of address groups this address belongs to.
 		   You might have to specify a new group in xioopts.h */
    0,		/* an integer passed to xioopen_openssl_listen; makes it possible to
 		   use the same xioopen_openssl_listen function for slightly different
@@ -231,8 +232,8 @@ static int
       opt_commonname = hostname;
    }
 
-   result =
-      _xioopen_openssl_prepare(opts, xfd, false, &opt_ver, opt_cert, &ctx);
+   result = _xioopen_openssl_prepare(opts, xfd,
+                  false, &opt_ver, opt_cert, &ctx, &ipproto, &socktype);
    if (result != STAT_OK)  return STAT_NORETRY;
 
    result =
@@ -469,8 +470,8 @@ static int
 
    applyopts(-1, opts, PH_EARLY);
 
-   result =
-      _xioopen_openssl_prepare(opts, xfd, true, &opt_ver, opt_cert, &ctx);
+   result = _xioopen_openssl_prepare(opts, xfd,
+                  true, &opt_ver, opt_cert, &ctx, &ipproto, &socktype);
    if (result != STAT_OK)  return STAT_NORETRY;
 
    if (_xioopen_ipapp_listen_prepare(opts, &opts0, portname, &pf, ipproto,
@@ -493,17 +494,25 @@ static int
 #endif /* WITH_RETRY */
 	 level = E_ERROR;
 
-      /* tcp listen; this can fork() for us; it only returns on error or on
-	 successful establishment of tcp connection */
-      result = _xioopen_listen(xfd, xioflags,
+      /*
+         this can fork() for us; it only returns on error or on
+         successful establishment of tcp connection
+       */
+      if (ipproto == IPPROTO_TCP) {
+            result = _xioopen_listen(xfd, xioflags,
 			       (struct sockaddr *)us, uslen,
-			       opts, pf, socktype, IPPROTO_TCP,
+			       opts, pf, socktype, ipproto,
 #if WITH_RETRY
 			       (xfd->retry||xfd->forever)?E_INFO:E_ERROR
 #else
 			       E_ERROR
 #endif /* WITH_RETRY */
 			       );
+      } else {
+            result = _xioopen_ipdgram_listen(xfd, xioflags,
+                  (struct sockaddr *)us, uslen, opts, pf, socktype, ipproto);
+      }
+
 	 /*! not sure if we should try again on retry/forever */
       switch (result) {
       case STAT_OK: break;
@@ -712,7 +721,9 @@ int
 			    bool server,	/* SSL client: false */
 			    bool *opt_ver,
 			    const char *opt_cert,
-			    SSL_CTX **ctx)
+			    SSL_CTX **ctx,
+			    int *ipproto,
+			    int *socktype)
 {
    bool opt_fips = false;
    const SSL_METHOD *method = NULL;
@@ -801,6 +812,8 @@ int
 #if HAVE_DTLSv1_client_method
 	 } else if (!strcasecmp(me_str, "DTLS") || !strcasecmp(me_str, "DTLS1")) {
 	    method = sycDTLSv1_client_method();
+	    *ipproto = IPPROTO_UDP;
+	    *socktype = SOCK_DGRAM;
 #endif
 	 } else {
 	    Error1("openssl-method=\"%s\": method unknown or not provided by library", me_str);
@@ -854,6 +867,8 @@ int
 #if HAVE_DTLSv1_server_method
 	 } else if (!strcasecmp(me_str, "DTLS") || !strcasecmp(me_str, "DTLS1")) {
 	    method = sycDTLSv1_server_method();
+	    *ipproto = IPPROTO_UDP;
+	    *socktype = SOCK_DGRAM;
 #endif
 	 } else {
 	    Error1("openssl-method=\"%s\": method unknown or not provided by library", me_str);
